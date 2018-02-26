@@ -97,6 +97,12 @@ options:
           - The placement strategy objects to use for tasks in your service. You can specify a maximum of 5 strategy rules per service
         required: false
         version_added: 2.4
+    launch_type:
+        description:
+          - The launch type on which to run your service.
+        required: false
+        choices: ["EC2", "FARGATE"]
+        default: "EC2"
 extends_documentation_fragment:
     - aws
     - ec2
@@ -322,12 +328,13 @@ class EcsServiceManager:
 
     def create_service(self, service_name, cluster_name, task_definition, load_balancers,
                        desired_count, client_token, role, deployment_configuration,
-                       placement_constraints, placement_strategy):
+                       placement_constraints, placement_strategy, launch_type):
         response = self.ecs.create_service(
             cluster=cluster_name,
             serviceName=service_name,
             taskDefinition=task_definition,
             loadBalancers=load_balancers,
+            launchType=launch_type,
             desiredCount=desired_count,
             clientToken=client_token,
             role=role,
@@ -363,6 +370,7 @@ def main():
         role=dict(required=False, default='', type='str'),
         delay=dict(required=False, type='int', default=10),
         repeat=dict(required=False, type='int', default=10),
+        launch_type=dict(required=False, type='str', default='EC2', choices=['EC2', 'FARGATE']),
         deployment_configuration=dict(required=False, default={}, type='dict'),
         placement_constraints=dict(required=False, default=[], type='list'),
         placement_strategy=dict(required=False, default=[], type='list')
@@ -433,7 +441,8 @@ def main():
                                                           role,
                                                           deploymentConfiguration,
                                                           module.params['placement_constraints'],
-                                                          module.params['placement_strategy'])
+                                                          module.params['placement_strategy'],
+                                                          module.params['launch_type'])
 
                 results['service'] = response
 
