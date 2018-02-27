@@ -103,6 +103,28 @@ options:
         required: false
         choices: ["EC2", "FARGATE"]
         default: "EC2"
+        version_added: 2.6
+    subnets:
+        description:
+          - The subnets associated with the task or service.
+          - This parameter is required for task definitions that use the awsvpc network mode
+        required: false
+        version_added: 2.6
+    security_groups:
+        description:
+          - The security groups associated with the task or service. If you do not specify a security group,
+          - the default security group for the VPC is used.
+          - This parameter is required for task definitions that use the awsvpc network mode
+        required: false
+        version_added: 2.6
+    assign_public_ip:
+        description:
+          - Specifies whether or not the task's elastic network interface receives a public IP address
+          - This parameter is required for task definitions that use the awsvpc network mode
+        required: false
+        choices: ["DISABLED", "ENABLED"]
+        default: "DISABLED"
+        version_added: 2.6
 extends_documentation_fragment:
     - aws
     - ec2
@@ -271,7 +293,6 @@ DEPLOYMENT_CONFIGURATION_TYPE_MAP = {
     'minimum_healthy_percent': 'int'
 }
 
-
 try:
     import botocore
     HAS_BOTO3 = True
@@ -328,7 +349,7 @@ class EcsServiceManager:
 
     def create_service(self, service_name, cluster_name, task_definition, load_balancers,
                        desired_count, client_token, role, deployment_configuration,
-                       placement_constraints, placement_strategy, launch_type):
+                       placement_constraints, placement_strategy, launch_type, network_configuration):
         response = self.ecs.create_service(
             cluster=cluster_name,
             serviceName=service_name,
@@ -340,7 +361,8 @@ class EcsServiceManager:
             role=role,
             deploymentConfiguration=deployment_configuration,
             placementConstraints=placement_constraints,
-            placementStrategy=placement_strategy)
+            placementStrategy=placement_strategy,
+            networkConfiguration=network_configuration)
         return response['service']
 
     def update_service(self, service_name, cluster_name, task_definition,
@@ -373,7 +395,10 @@ def main():
         launch_type=dict(required=False, type='str', default='EC2', choices=['EC2', 'FARGATE']),
         deployment_configuration=dict(required=False, default={}, type='dict'),
         placement_constraints=dict(required=False, default=[], type='list'),
-        placement_strategy=dict(required=False, default=[], type='list')
+        placement_strategy=dict(required=False, default=[], type='list'),
+        subnets=dict(required=False, default=[], type='list'),
+        security_groups=dict(required=False, default=[], type='list'),
+        assign_public_ip=dict(required=False, type='str', default='ENABLED', choices=['DISABLED', 'ENABLED']),
     ))
 
     module = AnsibleModule(argument_spec=argument_spec,
@@ -381,8 +406,10 @@ def main():
                            required_if=[
                                ('state', 'present', ['task_definition', 'desired_count'])
                            ],
-                           required_together=[['load_balancers', 'role']]
-                           )
+                           required_together=[
+                               ['load_balancers', 'role'],
+                               ['security_groups', 'subnets'],
+                           ])
 
     if not HAS_BOTO3:
         module.fail_json(msg='boto3 is required.')
@@ -432,6 +459,16 @@ def main():
                         if 'containerPort' in loadBalancer:
                             loadBalancer['containerPort'] = int(loadBalancer['containerPort'])
                     # doesn't exist. create it.
+                    if len(module.params['subnets']) > 0:
+                        networkConfiguration = {
+                            'awsvpcConfiguration': {
+                                'subnets': module.params['subnets'],
+                                'securityGroups': module.params['security_groups'],
+                                'assignPublicIp': module.params['assign_public_ip']
+                            }
+                        }
+                    else:
+                        networkConfiguration = None
                     response = service_mgr.create_service(module.params['name'],
                                                           module.params['cluster'],
                                                           module.params['task_definition'],
@@ -442,7 +479,8 @@ def main():
                                                           deploymentConfiguration,
                                                           module.params['placement_constraints'],
                                                           module.params['placement_strategy'],
-                                                          module.params['launch_type'])
+                                                          module.params['launch_type'],
+                                                          networkConfiguration)
 
                 results['service'] = response
 
