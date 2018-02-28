@@ -339,3 +339,5 @@
 
   when: ansible_distribution in ['MacOSX', 'Linux']
 # ============================================================
+
+- include_tasks: s3_bucket.yml
