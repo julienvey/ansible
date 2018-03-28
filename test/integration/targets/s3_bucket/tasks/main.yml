@@ -307,6 +307,7 @@
         name: "{{item}}"
         state: absent
         <<: *aws_connection_info
+      ignore_errors: yes
       with_items:
         - "{{ resource_prefix }}-testbucket-ansible"
         - "{{ resource_prefix }}-testbucket-ansible-complex"

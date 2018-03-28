@@ -113,7 +113,7 @@ from ansible.module_utils.six import string_types
 from ansible.module_utils.basic import to_text
 from ansible.module_utils.aws.core import AnsibleAWSModule
 from ansible.module_utils.ec2 import compare_policies, ec2_argument_spec, boto3_tag_list_to_ansible_dict, ansible_dict_to_boto3_tag_list
-from ansible.module_utils.ec2 import get_aws_connection_info, boto3_conn
+from ansible.module_utils.ec2 import get_aws_connection_info, boto3_conn, AWSRetry
 
 try:
     from botocore.exceptions import BotoCoreError, ClientError, EndpointConnectionError, WaiterError
@@ -161,7 +161,7 @@ def create_or_update_bucket(s3_client, module, location):
 
     # Versioning
     try:
-        versioning_status = s3_client.get_bucket_versioning(Bucket=name)
+        versioning_status = get_bucket_versioning(s3_client, name)
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket versioning")
 
@@ -174,15 +174,12 @@ def create_or_update_bucket(s3_client, module, location):
 
         if required_versioning:
             try:
-                s3_client.put_bucket_versioning(Bucket=name, VersioningConfiguration={'Status': required_versioning})
+                put_bucket_versioning(s3_client, name, required_versioning)
                 changed = True
             except (BotoCoreError, ClientError) as e:
                 module.fail_json_aws(e, msg="Failed to update bucket versioning")
 
-            try:
-                versioning_status = s3_client.get_bucket_versioning(Bucket=name)
-            except (BotoCoreError, ClientError) as e:
-                module.fail_json_aws(e, msg="Failed to get updated versioning for bucket")
+            versioning_status = wait_versioning_is_applied(module, s3_client, name, required_versioning)
 
     # This output format is there to ensure compatibility with previous versions of the module
     versioning_return_value = {
@@ -192,24 +189,20 @@ def create_or_update_bucket(s3_client, module, location):
 
     # Requester pays
     try:
-        requester_pays_status = s3_client.get_bucket_request_payment(Bucket=name).get('Payer')
+        requester_pays_status = get_bucket_request_payment(s3_client, name)
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket request payment")
 
     payer = 'Requester' if requester_pays else 'BucketOwner'
     if requester_pays_status != payer:
-        s3_client.put_bucket_request_payment(Bucket=name, RequestPaymentConfiguration={'Payer': payer})
+        put_bucket_request_payment(s3_client, name, payer)
         changed = True
+        requester_pays_status = wait_payer_is_applied(module, s3_client, name, payer)
 
     # Policy
     try:
-        current_policy = json.loads(s3_client.get_bucket_policy(Bucket=name).get('Policy'))
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
-            current_policy = None
-        else:
-            module.fail_json_aws(e, msg="Failed to get bucket policy")
-    except BotoCoreError as e:
+        current_policy = get_bucket_policy(s3_client, name)
+    except (ClientError, BotoCoreError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket policy")
 
     if policy is not None:
@@ -218,14 +211,14 @@ def create_or_update_bucket(s3_client, module, location):
 
         if not policy and current_policy:
             try:
-                s3_client.delete_bucket_policy(Bucket=name)
+                delete_bucket_policy(s3_client, name)
             except (BotoCoreError, ClientError) as e:
                 module.fail_json_aws(e, msg="Failed to delete bucket policy")
             changed = True
 
         elif compare_policies(current_policy, policy):
             try:
-                s3_client.put_bucket_policy(Bucket=name, Policy=json.dumps(policy))
+                put_bucket_policy(s3_client, name, policy)
             except (BotoCoreError, ClientError) as e:
                 module.fail_json_aws(e, msg="Failed to update bucket policy")
             changed = True
@@ -243,7 +236,7 @@ def create_or_update_bucket(s3_client, module, location):
                     module.fail_json_aws(e, msg="Failed to update bucket tags")
             else:
                 try:
-                    s3_client.delete_bucket_tagging(Bucket=name)
+                    delete_bucket_tagging(s3_client, name)
                 except (BotoCoreError, ClientError) as e:
                     module.fail_json_aws(e, msg="Failed to delete bucket tags")
             wait_tags_are_applied(module, s3_client, name, tags)
@@ -254,13 +247,106 @@ def create_or_update_bucket(s3_client, module, location):
                      requester_pays=requester_pays, policy=current_policy, tags=current_tags_dict)
 
 
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def put_bucket_policy(s3_client, bucket_name, policy):
+    s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def delete_bucket_policy(s3_client, bucket_name):
+    s3_client.delete_bucket_policy(Bucket=bucket_name)
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def get_bucket_policy(s3_client, bucket_name):
+    try:
+        current_policy = json.loads(s3_client.get_bucket_policy(Bucket=bucket_name).get('Policy'))
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
+            current_policy = None
+        else:
+            raise e
+    return current_policy
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def put_bucket_request_payment(s3_client, bucket_name, payer):
+    s3_client.put_bucket_request_payment(Bucket=bucket_name, RequestPaymentConfiguration={'Payer': payer})
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def get_bucket_request_payment(s3_client, bucket_name):
+    return s3_client.get_bucket_request_payment(Bucket=bucket_name).get('Payer')
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def get_bucket_versioning(s3_client, bucket_name):
+    return s3_client.get_bucket_versioning(Bucket=bucket_name)
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def put_bucket_versioning(s3_client, bucket_name, required_versioning):
+    s3_client.put_bucket_versioning(Bucket=bucket_name, VersioningConfiguration={'Status': required_versioning})
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def delete_bucket_tagging(s3_client, bucket_name):
+    s3_client.delete_bucket_tagging(Bucket=bucket_name)
+
+
+@AWSRetry.backoff(catch_extra_error_codes=['NoSuchBucket'])
+def delete_bucket(s3_client, bucket_name):
+    s3_client.delete_bucket(Bucket=bucket_name)
+
+
+def wait_policy_is_applied(module, s3_client, bucket_name, expected_policy):
+    for dummy in range(0, 10):
+        try:
+            current_policy = get_bucket_policy(s3_client, bucket_name)
+        except (ClientError, BotoCoreError) as e:
+            module.fail_json_aws(e, msg="Failed to get bucket policy")
+
+        if compare_policies(current_policy, expected_policy):
+            time.sleep(5)
+        else:
+            return current_policy
+    module.fail_json(msg="Bucket policy failed to apply in the excepted time")
+
+
+def wait_payer_is_applied(module, s3_client, bucket_name, expected_payer):
+    for dummy in range(0, 10):
+        try:
+            requester_pays_status = get_bucket_request_payment(s3_client, bucket_name)
+        except (BotoCoreError, ClientError) as e:
+            module.fail_json_aws(e, msg="Failed to get bucket request payment")
+        if requester_pays_status != expected_payer:
+            time.sleep(5)
+        else:
+            return requester_pays_status
+    module.fail_json(msg="Bucket request payment failed to apply in the excepted time")
+
+
+def wait_versioning_is_applied(module, s3_client, bucket_name, required_versioning):
+    for dummy in range(0, 10):
+        try:
+            versioning_status = get_bucket_versioning(s3_client, bucket_name)
+        except (BotoCoreError, ClientError) as e:
+            module.fail_json_aws(e, msg="Failed to get updated versioning for bucket")
+        if versioning_status.get('Status') != required_versioning:
+            time.sleep(5)
+        else:
+            return versioning_status
+    module.fail_json(msg="Bucket versioning failed to apply in the excepted time")
+
+
 def wait_tags_are_applied(module, s3_client, bucket_name, expected_tags_dict):
-    for dummy in range(0, 5):
+    for dummy in range(0, 10):
         current_tags_dict = get_current_bucket_tags_dict(module, s3_client, bucket_name)
         if current_tags_dict != expected_tags_dict:
             time.sleep(5)
         else:
             return
+    module.fail_json(msg="Bucket tags failed to apply in the excepted time")
 
 
 def get_current_bucket_tags_dict(module, s3_client, bucket_name):
@@ -319,7 +405,7 @@ def destroy_bucket(s3_client, module):
             module.fail_json_aws(e, msg="Failed while deleting bucket")
 
     try:
-        s3_client.delete_bucket(Bucket=name)
+        delete_bucket(s3_client, name)
         s3_client.get_waiter('bucket_not_exists').wait(Bucket=name)
     except WaiterError as e:
         module.fail_json_aws(e, msg='An error occurred waiting for the bucket to be deleted.')
