@@ -1,3 +1,4 @@
 # path to the main.yml of the s3_bucket test
 test_path: /home/jvey/tech/github.com/ansible/ansible/test/integration/targets/s3_bucket/tasks/main.yml
-number_of_times: 100
+number_of_times: 10
+pause_seconds: 5
