@@ -263,7 +263,7 @@ def bucket_exists(s3_client, bucket_name):
     return True
 
 
-@AWSRetry.exponential_backoff()
+@AWSRetry.exponential_backoff(max_delay=120)
 def create_bucket(s3_client, bucket_name, configuration):
     try:
         if len(configuration) > 0:
@@ -280,22 +280,22 @@ def create_bucket(s3_client, bucket_name, configuration):
             raise e
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def put_bucket_tagging(s3_client, bucket_name, tags):
     s3_client.put_bucket_tagging(Bucket=bucket_name, Tagging={'TagSet': ansible_dict_to_boto3_tag_list(tags)})
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def put_bucket_policy(s3_client, bucket_name, policy):
     s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def delete_bucket_policy(s3_client, bucket_name):
     s3_client.delete_bucket_policy(Bucket=bucket_name)
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def get_bucket_policy(s3_client, bucket_name):
     try:
         current_policy = json.loads(s3_client.get_bucket_policy(Bucket=bucket_name).get('Policy'))
@@ -307,32 +307,32 @@ def get_bucket_policy(s3_client, bucket_name):
     return current_policy
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def put_bucket_request_payment(s3_client, bucket_name, payer):
     s3_client.put_bucket_request_payment(Bucket=bucket_name, RequestPaymentConfiguration={'Payer': payer})
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def get_bucket_request_payment(s3_client, bucket_name):
     return s3_client.get_bucket_request_payment(Bucket=bucket_name).get('Payer')
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def get_bucket_versioning(s3_client, bucket_name):
     return s3_client.get_bucket_versioning(Bucket=bucket_name)
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def put_bucket_versioning(s3_client, bucket_name, required_versioning):
     s3_client.put_bucket_versioning(Bucket=bucket_name, VersioningConfiguration={'Status': required_versioning})
 
 
-@AWSRetry.exponential_backoff(catch_extra_error_codes=['NoSuchBucket'])
+@AWSRetry.exponential_backoff(max_delay=120, catch_extra_error_codes=['NoSuchBucket'])
 def delete_bucket_tagging(s3_client, bucket_name):
     s3_client.delete_bucket_tagging(Bucket=bucket_name)
 
 
-@AWSRetry.exponential_backoff()
+@AWSRetry.exponential_backoff(max_delay=120)
 def delete_bucket(s3_client, bucket_name):
     try:
         s3_client.delete_bucket(Bucket=bucket_name)
