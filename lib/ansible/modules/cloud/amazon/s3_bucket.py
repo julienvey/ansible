@@ -123,6 +123,8 @@ except ImportError:
 
 def create_or_update_bucket(s3_client, module, location):
 
+    debug_output_dict = {}
+
     policy = module.params.get("policy")
     name = module.params.get("name")
     requester_pays = module.params.get("requester_pays")
@@ -137,14 +139,27 @@ def create_or_update_bucket(s3_client, module, location):
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg="Failed to check bucket presence")
 
+    debug_output_dict['bucket_present_0'] = bucket_is_present
+    module.warn("JVEY-S3_BUCKET => %s" % bucket_is_present)
+    module.fail_json_aws(e, msg="Failed while creating bucket")
+
     if not bucket_is_present:
-        configuration = {}
-        if location not in ('us-east-1', None):
-            configuration['LocationConstraint'] = location
         try:
-            create_bucket(s3_client, name, configuration)
-            changed = True
+            bucket_changed = create_bucket(s3_client, name, location)
             s3_client.get_waiter('bucket_exists').wait(Bucket=name)
+            # At this stage, it can happens that the bucket is not visible, even if the previous
+            # create_bucket or head_bucket method succeeded. Somehow, get_bucket_versioning is a more accurate
+            # indicator or whether the bucket has been really created or not. If the method fails after
+            # all the retry (@AWSRetry), we retry the create_bucket operation
+            try:
+                versioning_status = get_bucket_versioning(s3_client, name)
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'NoSuchBucket':
+                    bucket_changed = create_bucket(s3_client, name, location)
+                    s3_client.get_waiter('bucket_exists').wait(Bucket=name)
+                else:
+                    module.fail_json_aws(e, msg="Failed to get bucket versioning while creating the bucket")
+            changed = changed or bucket_changed
         except WaiterError as e:
             module.fail_json_aws(e, msg='An error occurred waiting for the bucket to become available.')
         except (BotoCoreError, ClientError) as e:
@@ -153,7 +168,7 @@ def create_or_update_bucket(s3_client, module, location):
     # Versioning
     try:
         versioning_status = get_bucket_versioning(s3_client, name)
-    except (BotoCoreError, ClientError) as e:
+    except (ClientError, BotoCoreError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket versioning")
 
     if versioning is not None:
@@ -187,8 +202,13 @@ def create_or_update_bucket(s3_client, module, location):
     payer = 'Requester' if requester_pays else 'BucketOwner'
     if requester_pays_status != payer:
         put_bucket_request_payment(s3_client, name, payer)
+        requester_pays_status = wait_payer_is_applied(module, s3_client, name, payer, should_fail=False)
+        if requester_pays_status is None:
+            # We have seen that it happens quite a lot of times that the put request was not taken into
+            # account, so we retry one more time
+            put_bucket_request_payment(s3_client, name, payer)
+            requester_pays_status = wait_payer_is_applied(module, s3_client, name, payer, should_fail=True)
         changed = True
-        requester_pays_status = wait_payer_is_applied(module, s3_client, name, payer)
 
     # Policy
     try:
@@ -205,16 +225,20 @@ def create_or_update_bucket(s3_client, module, location):
                 delete_bucket_policy(s3_client, name)
             except (BotoCoreError, ClientError) as e:
                 module.fail_json_aws(e, msg="Failed to delete bucket policy")
-            changed = True
             current_policy = wait_policy_is_applied(module, s3_client, name, policy)
-
+            changed = True
         elif compare_policies(current_policy, policy):
             try:
                 put_bucket_policy(s3_client, name, policy)
             except (BotoCoreError, ClientError) as e:
                 module.fail_json_aws(e, msg="Failed to update bucket policy")
+            current_policy = wait_policy_is_applied(module, s3_client, name, policy, should_fail=False)
+            if current_policy is None:
+                # As for request payement, it happens quite a lot of times that the put request was not taken into
+                # account, so we retry one more time
+                put_bucket_policy(s3_client, name, policy)
+                current_policy = wait_policy_is_applied(module, s3_client, name, policy, should_fail=True)
             changed = True
-            current_policy = wait_policy_is_applied(module, s3_client, name, policy)
 
     # Tags
     try:
@@ -239,7 +263,7 @@ def create_or_update_bucket(s3_client, module, location):
             changed = True
 
     module.exit_json(changed=changed, name=name, versioning=versioning_return_value,
-                     requester_pays=requester_pays, policy=current_policy, tags=current_tags_dict)
+                     requester_pays=requester_pays, policy=current_policy, tags=current_tags_dict, debug=debug_output_dict)
 
 
 def bucket_exists(s3_client, bucket_name):
@@ -264,18 +288,22 @@ def bucket_exists(s3_client, bucket_name):
 
 
 @AWSRetry.exponential_backoff(max_delay=120)
-def create_bucket(s3_client, bucket_name, configuration):
+def create_bucket(s3_client, bucket_name, location):
     try:
+        configuration = {}
+        if location not in ('us-east-1', None):
+            configuration['LocationConstraint'] = location
         if len(configuration) > 0:
             s3_client.create_bucket(Bucket=bucket_name, CreateBucketConfiguration=configuration)
         else:
             s3_client.create_bucket(Bucket=bucket_name)
+        return True
     except ClientError as e:
         error_code = e.response['Error']['Code']
         if error_code == 'BucketAlreadyOwnedByYou':
             # We should never get there since we check the bucket presence before calling the create_or_update_bucket
             # method. However, the AWS Api sometimes fails to report bucket presence, so we catch this exception
-            pass
+            return False
         else:
             raise e
 
@@ -345,7 +373,7 @@ def delete_bucket(s3_client, bucket_name):
             raise e
 
 
-def wait_policy_is_applied(module, s3_client, bucket_name, expected_policy):
+def wait_policy_is_applied(module, s3_client, bucket_name, expected_policy, should_fail=True):
     for dummy in range(0, 12):
         try:
             current_policy = get_bucket_policy(s3_client, bucket_name)
@@ -356,10 +384,13 @@ def wait_policy_is_applied(module, s3_client, bucket_name, expected_policy):
             time.sleep(5)
         else:
             return current_policy
-    module.fail_json(msg="Bucket policy failed to apply in the excepted time")
+    if should_fail:
+        module.fail_json(msg="Bucket policy failed to apply in the excepted time")
+    else:
+        return None
 
 
-def wait_payer_is_applied(module, s3_client, bucket_name, expected_payer):
+def wait_payer_is_applied(module, s3_client, bucket_name, expected_payer, should_fail=True):
     for dummy in range(0, 12):
         try:
             requester_pays_status = get_bucket_request_payment(s3_client, bucket_name)
@@ -369,7 +400,10 @@ def wait_payer_is_applied(module, s3_client, bucket_name, expected_payer):
             time.sleep(5)
         else:
             return requester_pays_status
-    module.fail_json(msg="Bucket request payment failed to apply in the excepted time")
+    if should_fail:
+        module.fail_json(msg="Bucket request payment failed to apply in the excepted time")
+    else:
+        return None
 
 
 def wait_versioning_is_applied(module, s3_client, bucket_name, required_versioning):
