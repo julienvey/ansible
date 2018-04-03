@@ -139,29 +139,13 @@ def create_or_update_bucket(s3_client, module, location):
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg="Failed to check bucket presence")
 
-    debug_output_dict['bucket_present_0'] = bucket_is_present
-    module.warn("JVEY-S3_BUCKET => %s" % bucket_is_present)
-    module.fail_json_aws(e, msg="Failed while creating bucket")
-
     if not bucket_is_present:
         try:
             bucket_changed = create_bucket(s3_client, name, location)
             s3_client.get_waiter('bucket_exists').wait(Bucket=name)
-            # At this stage, it can happens that the bucket is not visible, even if the previous
-            # create_bucket or head_bucket method succeeded. Somehow, get_bucket_versioning is a more accurate
-            # indicator or whether the bucket has been really created or not. If the method fails after
-            # all the retry (@AWSRetry), we retry the create_bucket operation
-            try:
-                versioning_status = get_bucket_versioning(s3_client, name)
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchBucket':
-                    bucket_changed = create_bucket(s3_client, name, location)
-                    s3_client.get_waiter('bucket_exists').wait(Bucket=name)
-                else:
-                    module.fail_json_aws(e, msg="Failed to get bucket versioning while creating the bucket")
             changed = changed or bucket_changed
         except WaiterError as e:
-            module.fail_json_aws(e, msg='An error occurred waiting for the bucket to become available.')
+            module.fail_json_aws(e, msg='An error occurred waiting for the bucket to become available')
         except (BotoCoreError, ClientError) as e:
             module.fail_json_aws(e, msg="Failed while creating bucket")
 
@@ -267,24 +251,10 @@ def create_or_update_bucket(s3_client, module, location):
 
 
 def bucket_exists(s3_client, bucket_name):
-    try:
-        s3_client.head_bucket(Bucket=bucket_name)
-    except ClientError as e:
-        # If a client error is thrown, then check that it was a 404 error.
-        # If it was a 404 error, then the bucket does not exist.
-        if int(e.response['Error']['Code']) == 404:
-            # Bucket should not exist, but AWS API sometimes reports incorrectly, so
-            # we check again one more time
-            try:
-                s3_client.head_bucket(Bucket=bucket_name)
-            except ClientError as e:
-                if int(e.response['Error']['Code']) == 404:
-                    return False
-                else:
-                    raise e
-        else:
-            raise e
-    return True
+    # head_bucket appeared to be really inconsistent, so we use list_buckets instead,
+    # and loop over all the buckets, even if we know it's less performant :(
+    all_buckets = s3_client.list_buckets(Bucket=bucket_name)['Buckets']
+    return any(bucket['Name'] == bucket_name for bucket in all_buckets)
 
 
 @AWSRetry.exponential_backoff(max_delay=120)
