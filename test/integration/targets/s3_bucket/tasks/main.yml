@@ -90,9 +90,9 @@
       register: assertion
 
     # ============================================================
-    # - name: Pause to help with s3 bucket eventual consistency
-    #   pause:
-    #     seconds: 10
+    - name: Pause to help with s3 bucket eventual consistency
+      pause:
+        seconds: 10
 
     - name: Try to update the same complex s3_bucket
       s3_bucket:
@@ -137,9 +137,9 @@
       register: assertion
 
     # ============================================================
-    # - name: Pause to help with s3 bucket eventual consistency
-    #   pause:
-    #     seconds: 10
+    - name: Pause to help with s3 bucket eventual consistency
+      pause:
+        seconds: 10
 
     - name: Update attributes for s3_bucket
       s3_bucket:
@@ -171,9 +171,9 @@
       register: assertion
 
     # ============================================================
-    # - name: Pause to help with s3 bucket eventual consistency
-    #   pause:
-    #     seconds: 10
+    - name: Pause to help with s3 bucket eventual consistency
+      pause:
+        seconds: 10
 
     - name: Remove a tag for s3_bucket
       s3_bucket:
@@ -195,9 +195,9 @@
       register: assertion
 
     # ============================================================
-    # - name: Pause to help with s3 bucket eventual consistency
-    #   pause:
-    #     seconds: 10
+    - name: Pause to help with s3 bucket eventual consistency
+      pause:
+        seconds: 10
 
     - name: Do not specify any tag to ensure previous tags are not removed
       s3_bucket:

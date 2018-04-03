@@ -107,6 +107,7 @@ EXAMPLES = '''
 import json
 import os
 import time
+import random
 
 import ansible.module_utils.six.moves.urllib.parse as urlparse
 from ansible.module_utils.six import string_types
@@ -152,6 +153,7 @@ def create_or_update_bucket(s3_client, module, location):
     # Versioning
     try:
         versioning_status = get_bucket_versioning(s3_client, name)
+        # module.warn("%s %s" % (random.random(), str(versioning_status.get('Status'))))
     except (ClientError, BotoCoreError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket versioning")
 
@@ -180,6 +182,7 @@ def create_or_update_bucket(s3_client, module, location):
     # Requester pays
     try:
         requester_pays_status = get_bucket_request_payment(s3_client, name)
+        # module.warn("%s %s" % (random.random(), str(requester_pays_status)))
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket request payment")
 
@@ -197,6 +200,7 @@ def create_or_update_bucket(s3_client, module, location):
     # Policy
     try:
         current_policy = get_bucket_policy(s3_client, name)
+        # module.warn("%s %s" % (random.random(), str(current_policy)))
     except (ClientError, BotoCoreError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket policy")
 
@@ -227,6 +231,7 @@ def create_or_update_bucket(s3_client, module, location):
     # Tags
     try:
         current_tags_dict = get_current_bucket_tags_dict(s3_client, name)
+        # module.warn("%s %s" % (random.random(), str(current_tags_dict)))
     except (ClientError, BotoCoreError) as e:
         module.fail_json_aws(e, msg="Failed to get bucket tags")
 
